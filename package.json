@@ -1,0 +1,18 @@
+{
+  "name": "jari-back",
+  "version": "1.0.0",
+  "description": "Jari backend — Bun + Hono. Syncs Jira and serves the Jari frontend.",
+  "scripts": {
+    "dev": "bun run --hot src/index.ts",
+    "start": "bun run src/index.ts",
+    "seed:user": "bun run src/scripts/seedUser.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "hono": "^4.6.14"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5"
+  }
+}
