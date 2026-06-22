@@ -70,19 +70,30 @@ export async function initSchema() {
   await sql`CREATE INDEX IF NOT EXISTS idx_worklogs_author    ON worklogs(author_account_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_worklogs_issue     ON worklogs(issue_id)`;
 
-  // App login accounts (local auth). Each maps a username/password to a Jira
-  // account id so "my work / my worklog" knows who you are. Dev seeds rows via
-  // src/scripts/seedUser.ts.
+  // App login accounts (local auth). Username/password are seeded; each user
+  // then links their OWN Jira account (email + API token) via the Settings page
+  // so worklogs are created as them, not as the shared workspace token owner.
+  // The API token is stored encrypted (see services/crypto.ts). Dev seeds the
+  // login via src/scripts/seedUser.ts.
   await sql`
     CREATE TABLE IF NOT EXISTS app_users (
       id              SERIAL       PRIMARY KEY,
       username        VARCHAR(100) UNIQUE NOT NULL,
       password_hash   TEXT         NOT NULL,
-      jira_account_id VARCHAR(100) NOT NULL,
+      jira_account_id VARCHAR(100),
       display_name    VARCHAR(200) NOT NULL,
+      jira_email          VARCHAR(200),
+      jira_api_token_enc  TEXT,
       created_at      TIMESTAMPTZ  DEFAULT NOW()
     )
   `;
+
+  // Migrate older app_users tables: per-user Jira credential columns, and make
+  // jira_account_id nullable (it is now derived from the user's token instead of
+  // being required up front at seed time).
+  await sql`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS jira_email VARCHAR(200)`;
+  await sql`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS jira_api_token_enc TEXT`;
+  await sql`ALTER TABLE app_users ALTER COLUMN jira_account_id DROP NOT NULL`;
 
   console.log("Schema ready");
 }

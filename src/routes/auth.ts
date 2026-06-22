@@ -1,7 +1,23 @@
 import { Hono } from "hono";
-import { login, verifyToken } from "../services/auth";
+import {
+  findUser,
+  login,
+  setUserJiraAccount,
+  signToken,
+  verifyToken,
+  type AppUser,
+} from "../services/auth";
+import { getWorkspace } from "../services/workspaces";
+import { getMyself } from "../services/jira";
 
 const auth = new Hono();
+
+/** Verify the Bearer token on a request → its payload, or null. */
+function authUser(c: { req: { header: (n: string) => string | undefined } }) {
+  const header = c.req.header("Authorization") ?? "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+  return verifyToken(token);
+}
 
 auth.post("/auth/login", async (c) => {
   const { username, password } = await c.req.json<{ username: string; password: string }>();
@@ -22,9 +38,7 @@ auth.post("/auth/login", async (c) => {
 
 // Validate a stored token on app load.
 auth.get("/auth/me", (c) => {
-  const header = c.req.header("Authorization") ?? "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-  const payload = verifyToken(token);
+  const payload = authUser(c);
   if (!payload) return c.json({ error: "invalid token" }, 401);
 
   return c.json({
@@ -33,6 +47,72 @@ auth.get("/auth/me", (c) => {
       accountId: payload.accountId,
       displayName: payload.displayName,
     },
+  });
+});
+
+// ─── Per-user Jira account linking (Settings page) ───────────────────────────
+
+// Current link status — drives the Settings form (shows linked email/account).
+auth.get("/auth/jira-account", async (c) => {
+  const payload = authUser(c);
+  if (!payload) return c.json({ error: "invalid token" }, 401);
+
+  const row = await findUser(payload.username);
+  if (!row) return c.json({ error: "user not found" }, 404);
+
+  return c.json({
+    username: row.username,
+    displayName: row.display_name,
+    jiraEmail: row.jira_email ?? "",
+    accountId: row.jira_account_id ?? "",
+    hasToken: !!row.jira_api_token_enc,
+  });
+});
+
+// Link/update the user's own Jira email + API token. The token is validated
+// against Jira (GET /myself) so we can store the real accountId and reject bad
+// tokens up front. A fresh app token is returned because accountId/displayName
+// may have changed.
+auth.post("/auth/jira-account", async (c) => {
+  const payload = authUser(c);
+  if (!payload) return c.json({ error: "invalid token" }, 401);
+
+  const { email, token } = await c.req.json<{ email?: string; token?: string }>();
+  if (!email || !token) return c.json({ error: "email และ token จำเป็นต้องกรอก" }, 400);
+
+  // Validate the credentials against the configured Jira site before storing.
+  const base = getWorkspace();
+  let me: { accountId: string; displayName: string; emailAddress?: string };
+  try {
+    me = await getMyself({ ...base, email: email.trim(), token: token.trim() });
+  } catch {
+    return c.json(
+      { error: "เชื่อมต่อ Jira ไม่สำเร็จ — ตรวจสอบ email และ API token อีกครั้ง" },
+      400,
+    );
+  }
+
+  await setUserJiraAccount({
+    username: payload.username,
+    email: email.trim(),
+    token: token.trim(),
+    accountId: me.accountId,
+    displayName: me.displayName,
+  });
+
+  const user: AppUser = {
+    username: payload.username,
+    jiraAccountId: me.accountId,
+    displayName: me.displayName,
+  };
+  return c.json({
+    token: signToken(user),
+    user: {
+      username: user.username,
+      accountId: user.jiraAccountId,
+      displayName: user.displayName,
+    },
+    jiraEmail: email.trim(),
   });
 });
 

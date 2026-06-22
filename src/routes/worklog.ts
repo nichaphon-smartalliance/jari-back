@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { getWorkspace } from "../services/workspaces";
 import { createWorklog } from "../services/jira";
 import { recordWorklogLocal } from "../services/jiraSync";
+import { getUserJiraCredentials, verifyToken } from "../services/auth";
 import { computeDaily, getWorklogCandidates } from "../services/aggregate";
 
 const worklog = new Hono();
@@ -22,8 +23,28 @@ interface CreateWorklogBody {
 }
 
 worklog.post("/worklog", async (c) => {
+  // Identify the logged-in user and use THEIR Jira credentials so the worklog is
+  // attributed to them in Jira — not to the shared workspace token owner.
+  const header = c.req.header("Authorization") ?? "";
+  const payload = verifyToken(header.startsWith("Bearer ") ? header.slice(7) : "");
+  if (!payload) return c.json({ error: "unauthorized" }, 401);
+
+  const creds = await getUserJiraCredentials(payload.username);
+  if (!creds) {
+    return c.json(
+      {
+        error:
+          "ยังไม่ได้เชื่อมบัญชี Jira ของคุณ — ไปที่หน้า Settings เพื่อใส่ email และ API token ก่อนลงเวลา",
+        code: "NO_JIRA_TOKEN",
+      },
+      400,
+    );
+  }
+
   const body = await c.req.json<CreateWorklogBody>();
-  const ws = getWorkspace(body.workspaceId);
+  const base = getWorkspace(body.workspaceId);
+  // Same Jira site (baseUrl), but authenticate as the logged-in user.
+  const ws = { ...base, email: creds.email, token: creds.token };
 
   // Jira requires a timezone offset; the team works in Asia/Bangkok (+07:00).
   const started = `${body.date}T09:00:00.000+0700`;

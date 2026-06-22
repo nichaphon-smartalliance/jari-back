@@ -180,6 +180,16 @@ export async function getIssueWorklogs(ws: WorkspaceConfig, issueKey: string): P
   return data.worklogs ?? [];
 }
 
+/** The Jira account that owns the given credentials — used to validate a user's
+ *  email + API token and resolve their accountId when they link an account. */
+export async function getMyself(
+  ws: WorkspaceConfig,
+): Promise<{ accountId: string; displayName: string; emailAddress?: string }> {
+  const res = await fetch(`${ws.baseUrl}/rest/api/3/myself`, { headers: jiraHeaders(ws) });
+  if (!res.ok) throw new Error(`[${ws.name}] myself ${res.status}: ${await res.text()}`);
+  return (await res.json()) as { accountId: string; displayName: string; emailAddress?: string };
+}
+
 export async function searchUser(ws: WorkspaceConfig, query: string) {
   const res = await fetch(
     `${ws.baseUrl}/rest/api/3/user/search?query=${encodeURIComponent(query)}`,
