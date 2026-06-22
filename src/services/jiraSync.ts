@@ -119,6 +119,37 @@ async function upsertWorklogs(
   return worklogs.length;
 }
 
+/**
+ * Reflect a single just-created Jira worklog into Postgres immediately, so the
+ * worklog candidate list (#4) and the daily roll-up (#5) update without waiting
+ * for the next full `syncWorklogs`. Mirrors the local write the "Done" action
+ * does. Issue metadata is read from the already-synced `issues` row; the
+ * ON CONFLICT in `upsertWorklogs` keeps this idempotent with a later sync.
+ */
+export async function recordWorklogLocal(wsId: string, wl: JiraWorklogRaw): Promise<void> {
+  const [issue] = await sql<
+    { key: string; summary: string; project_key: string; project_name: string }[]
+  >`
+    SELECT key, summary, project_key, project_name
+    FROM issues WHERE id = ${wl.issueId} AND workspace_id = ${wsId}
+  `;
+
+  const issueMap = new Map<
+    string,
+    { key: string; summary: string; projectKey: string; projectName: string }
+  >();
+  if (issue) {
+    issueMap.set(wl.issueId, {
+      key: issue.key,
+      summary: issue.summary,
+      projectKey: issue.project_key,
+      projectName: issue.project_name,
+    });
+  }
+
+  await upsertWorklogs([wl], issueMap, wsId);
+}
+
 export async function syncIssues(): Promise<SyncResult[]> {
   const workspaces = getWorkspaces();
   if (workspaces.length === 0) throw new Error("No Jira workspaces configured in .env");

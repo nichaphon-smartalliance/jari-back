@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { getWorkspace } from "../services/workspaces";
 import { createWorklog } from "../services/jira";
+import { recordWorklogLocal } from "../services/jiraSync";
 import { computeDaily, getWorklogCandidates } from "../services/aggregate";
 
 const worklog = new Hono();
@@ -26,13 +27,18 @@ worklog.post("/worklog", async (c) => {
 
   // Jira requires a timezone offset; the team works in Asia/Bangkok (+07:00).
   const started = `${body.date}T09:00:00.000+0700`;
-  const result = await createWorklog(ws, body.issueKey, {
+  const worklog = await createWorklog(ws, body.issueKey, {
     timeSpentSeconds: body.timeSpentSeconds,
     comment: body.comment,
     started,
   });
 
-  return c.json({ ok: true, worklogId: result.id });
+  // Mirror the new worklog into Postgres so the candidate list and daily total
+  // reflect it right away — otherwise the write only lands in Jira and the UI
+  // keeps showing the sub-task as "not logged" until the next full sync.
+  await recordWorklogLocal(ws.id, worklog);
+
+  return c.json({ ok: true, worklogId: worklog.id });
 });
 
 // Per-person daily 8h roll-up (feature #5).

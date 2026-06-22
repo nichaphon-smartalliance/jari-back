@@ -247,7 +247,7 @@ export async function createWorklog(
   ws: WorkspaceConfig,
   issueKey: string,
   args: { timeSpentSeconds: number; comment?: string; started: string },
-): Promise<{ id: string }> {
+): Promise<JiraWorklogRaw> {
   const res = await fetch(`${ws.baseUrl}/rest/api/3/issue/${issueKey}/worklog`, {
     method: "POST",
     headers: jiraHeaders(ws),
@@ -258,7 +258,9 @@ export async function createWorklog(
     }),
   });
   if (!res.ok) throw new Error(`[${ws.name}] create worklog ${res.status}: ${await res.text()}`);
-  return (await res.json()) as { id: string };
+  // Jira echoes the full worklog (id, issueId, author, started, …) — the caller
+  // uses it to mirror the entry into Postgres so reads reflect it immediately.
+  return (await res.json()) as JiraWorklogRaw;
 }
 
 /** Move an issue to its "Done" transition (feature #3, one-click done). */
