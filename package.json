@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "bun run --hot src/index.ts",
     "start": "bun run src/index.ts",
+    "build": "bun build src/index.ts --compile --minify --outfile dist/jari-back",
     "seed:user": "bun run src/scripts/seedUser.ts",
     "typecheck": "tsc --noEmit"
   },
