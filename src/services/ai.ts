@@ -90,30 +90,7 @@ export async function planWorklogs(input: PlanInput): Promise<PlanItem[]> {
   if (input.candidates.length === 0 || input.remainingSeconds <= 0) return [];
   const hoursLeft = Math.round((input.remainingSeconds / 3600) * 10) / 10;
 
-  const ws = getWorkspace();
-  const subtaskKeys = input.candidates.map((c) => c.issueKey);
-  const subtaskDetails = await fetchIssueDetails(ws, subtaskKeys);
-
-  const parentKeys = [
-    ...new Set(
-      [...subtaskDetails.values()]
-        .map((d) => d.parentKey)
-        .filter((k): k is string => Boolean(k)),
-    ),
-  ];
-  const parentDetails = await fetchIssueDetails(ws, parentKeys);
-
-  const context = input.candidates
-    .map((c) => {
-      const sub = subtaskDetails.get(c.issueKey);
-      const parent = sub?.parentKey ? parentDetails.get(sub.parentKey) : undefined;
-      const lines = [`- ${c.issueKey}: ${sub?.summary ?? c.summary}`];
-      if (sub?.description) lines.push(`  รายละเอียด sub-task: ${sub.description}`);
-      if (parent?.summary) lines.push(`  Story: ${parent.summary}`);
-      if (parent?.description) lines.push(`  รายละเอียด Story: ${parent.description}`);
-      return lines.join("\n");
-    })
-    .join("\n");
+  const context = await buildCandidateContext(input.candidates);
 
   const content = await chat(
     [
@@ -147,6 +124,123 @@ export async function planWorklogs(input: PlanInput): Promise<PlanItem[]> {
     throw new Error("AI ไม่สามารถสร้างแผนลงเวลาได้ ลองอีกครั้ง");
   }
   return plan;
+}
+
+/** Build the grounded context (real Story + sub-task summaries/descriptions)
+ *  shared by the worklog planners. */
+async function buildCandidateContext(
+  candidates: { issueKey: string; summary: string }[],
+): Promise<string> {
+  const ws = getWorkspace();
+  const subtaskDetails = await fetchIssueDetails(ws, candidates.map((c) => c.issueKey));
+  const parentKeys = [
+    ...new Set(
+      [...subtaskDetails.values()].map((d) => d.parentKey).filter((k): k is string => Boolean(k)),
+    ),
+  ];
+  const parentDetails = await fetchIssueDetails(ws, parentKeys);
+
+  return candidates
+    .map((c) => {
+      const sub = subtaskDetails.get(c.issueKey);
+      const parent = sub?.parentKey ? parentDetails.get(sub.parentKey) : undefined;
+      const lines = [`- ${c.issueKey}: ${sub?.summary ?? c.summary}`];
+      if (sub?.description) lines.push(`  รายละเอียด sub-task: ${sub.description}`);
+      if (parent?.summary) lines.push(`  Story: ${parent.summary}`);
+      if (parent?.description) lines.push(`  รายละเอียด Story: ${parent.description}`);
+      return lines.join("\n");
+    })
+    .join("\n");
+}
+
+// ─── Multi-day backfill (#6+) ────────────────────────────────────────────────
+
+export interface BackfillItem {
+  issueKey: string;
+  date: string; // YYYY-MM-DD
+  timeSpentSeconds: number;
+  comment: string;
+}
+
+/** AI estimates a realistic per-sub-task duration (0.5–8h) + a grounded comment,
+ *  NOT forced to a daily total — the packer then spreads them across days. */
+export async function estimateWorklogHours(
+  candidates: { issueKey: string; summary: string }[],
+): Promise<{ issueKey: string; hours: number; comment: string }[]> {
+  if (candidates.length === 0) return [];
+  const context = await buildCandidateContext(candidates);
+
+  const content = await chat(
+    [
+      {
+        role: "system",
+        content:
+          "คุณช่วยประเมินชั่วโมงทำงานที่สมเหตุสมผลของแต่ละ sub-task ที่เสร็จแล้ว ระหว่าง 0.5 ถึง 8 ชม.ต่อชิ้น " +
+          "ตามความซับซ้อนจากรายละเอียดที่ให้มา และเขียนคอมเมนต์ worklog ของแต่ละชิ้นโดยอ้างอิงรายละเอียด Story และ sub-task จริง " +
+          "ตอบกลับเป็น JSON array เท่านั้น ไม่มีข้อความอื่นหรือ markdown fence " +
+          'รูปแบบ [{"issueKey":"...","hours":1.5,"comment":"..."}]',
+      },
+      { role: "user", content: `รายการ sub-task:\n${context}` },
+    ],
+    { temperature: 0.3, max_tokens: 9000 },
+  );
+
+  const parsed = parseJsonObjects(content);
+  const out = parsed
+    .filter((p) => typeof p.issueKey === "string" && typeof p.hours === "number")
+    .map((p) => ({
+      issueKey: String(p.issueKey),
+      hours: Number(p.hours),
+      comment: typeof p.comment === "string" ? p.comment : "",
+    }));
+  if (out.length === 0) {
+    console.error("[ai.estimateWorklogHours] unusable content:", content);
+    throw new Error("AI ไม่สามารถประเมินเวลาได้ ลองอีกครั้ง");
+  }
+  return out;
+}
+
+/** Pack estimated sub-tasks into past workdays, going backward from startDate,
+ *  filling each day up to `workdaySeconds` (minus what's already logged that
+ *  day), optionally skipping weekends. Whole sub-tasks only (no splitting). */
+export function packBackfill(
+  estimates: { issueKey: string; hours: number; comment: string }[],
+  opts: {
+    startDate: string;
+    workdaySeconds: number;
+    skipWeekends: boolean;
+    loggedByDay: Record<string, number>;
+  },
+): BackfillItem[] {
+  const { startDate, workdaySeconds, skipWeekends, loggedByDay } = opts;
+  const items: BackfillItem[] = [];
+
+  const dayStr = (d: Date) => d.toISOString().slice(0, 10);
+  const isWeekend = (d: Date) => d.getUTCDay() === 0 || d.getUTCDay() === 6;
+  const backToWorkday = (d: Date) => {
+    while (skipWeekends && isWeekend(d)) d.setUTCDate(d.getUTCDate() - 1);
+  };
+
+  const cur = new Date(`${startDate}T12:00:00Z`);
+  backToWorkday(cur);
+  let used = loggedByDay[dayStr(cur)] ?? 0;
+
+  const prevWorkday = () => {
+    cur.setUTCDate(cur.getUTCDate() - 1);
+    backToWorkday(cur);
+    used = loggedByDay[dayStr(cur)] ?? 0;
+  };
+
+  for (const est of estimates) {
+    let secs = Math.max(0, Math.round((est.hours || 0) * 3600));
+    if (secs === 0) continue;
+    secs = Math.min(secs, workdaySeconds); // a single item never exceeds one day
+    if (used > 0 && used + secs > workdaySeconds) prevWorkday();
+    items.push({ issueKey: est.issueKey, date: dayStr(cur), timeSpentSeconds: secs, comment: est.comment });
+    used += secs;
+    if (used >= workdaySeconds) prevWorkday();
+  }
+  return items;
 }
 
 // ─── JSON extraction helpers (LLMs sometimes wrap output in prose/fences) ─────
