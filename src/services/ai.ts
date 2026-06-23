@@ -2,6 +2,9 @@
 // One gateway, provider-agnostic. We omit `provider` to use the fallback chain
 // (deepseek -> xai -> gemini -> openai) unless a specific model is needed.
 
+import { getWorkspace } from "./workspaces";
+import { fetchIssueDetails } from "./jira";
+
 const AI_BASE_URL = process.env.AI_API_BASE_URL ?? "http://localhost:3009";
 
 interface ChatMessage {
@@ -79,36 +82,71 @@ export interface PlanItem {
   comment: string;
 }
 
-/** #6 — split remaining hours across Done sub-tasks to hit the target. */
+/** #6 — split remaining hours across Done sub-tasks to hit the target, writing a
+ *  worklog comment per sub-task grounded in the real Story + sub-task descriptions
+ *  (not just titles) so the text actually reflects what was done. */
 export async function planWorklogs(input: PlanInput): Promise<PlanItem[]> {
+  console.log("[ai.planWorklogs] input:", input);
   if (input.candidates.length === 0 || input.remainingSeconds <= 0) return [];
   const hoursLeft = Math.round((input.remainingSeconds / 3600) * 10) / 10;
+
+  const ws = getWorkspace();
+  const subtaskKeys = input.candidates.map((c) => c.issueKey);
+  const subtaskDetails = await fetchIssueDetails(ws, subtaskKeys);
+
+  const parentKeys = [
+    ...new Set(
+      [...subtaskDetails.values()]
+        .map((d) => d.parentKey)
+        .filter((k): k is string => Boolean(k)),
+    ),
+  ];
+  const parentDetails = await fetchIssueDetails(ws, parentKeys);
+
+  const context = input.candidates
+    .map((c) => {
+      const sub = subtaskDetails.get(c.issueKey);
+      const parent = sub?.parentKey ? parentDetails.get(sub.parentKey) : undefined;
+      const lines = [`- ${c.issueKey}: ${sub?.summary ?? c.summary}`];
+      if (sub?.description) lines.push(`  รายละเอียด sub-task: ${sub.description}`);
+      if (parent?.summary) lines.push(`  Story: ${parent.summary}`);
+      if (parent?.description) lines.push(`  รายละเอียด Story: ${parent.description}`);
+      return lines.join("\n");
+    })
+    .join("\n");
+
   const content = await chat(
     [
       {
         role: "system",
         content:
           "คุณช่วยกระจายชั่วโมงทำงานลง worklog ของ sub-task ที่เสร็จแล้ว ให้รวมได้พอดีกับชั่วโมงที่เหลือ " +
-          'ตอบกลับเป็น JSON array เท่านั้น รูปแบบ [{"issueKey":"...","hours":1.5,"comment":"..."}] ผลรวม hours ต้องเท่ากับชั่วโมงที่เหลือ',
+          "และเขียนคอมเมนต์ worklog ของแต่ละ sub-task โดยอ้างอิงจากรายละเอียดของ Story และ sub-task ที่ให้มาจริง " +
+          "ไม่ใช่แค่คัดลอกหัวข้อ ตอบกลับเป็น JSON array เท่านั้น ไม่ต้องมีข้อความอื่นหรือ markdown fence " +
+          'รูปแบบ [{"issueKey":"...","hours":1.5,"comment":"..."}] ผลรวม hours ต้องเท่ากับชั่วโมงที่เหลือ',
       },
       {
         role: "user",
-        content: `ชั่วโมงที่เหลือ: ${hoursLeft}\nรายการ sub-task:\n${input.candidates
-          .map((c) => `- ${c.issueKey}: ${c.summary}`)
-          .join("\n")}`,
+        content: `ชั่วโมงที่เหลือ: ${hoursLeft}\nรายการ sub-task:\n${context}`,
       },
     ],
-    { temperature: 0.3 },
+    { temperature: 0.3 ,max_tokens: 9000},
   );
 
   const parsed = parseJsonObjects(content);
-  return parsed
+  const plan = parsed
     .filter((p) => typeof p.issueKey === "string" && typeof p.hours === "number")
     .map((p) => ({
       issueKey: String(p.issueKey),
       timeSpentSeconds: Math.round(Number(p.hours) * 3600),
       comment: typeof p.comment === "string" ? p.comment : "",
     }));
+  console.log("[ai.planWorklogs] plan:", plan);
+  if (plan.length === 0) {
+    console.error("[ai.planWorklogs] AI Center returned unusable content:", content);
+    throw new Error("AI ไม่สามารถสร้างแผนลงเวลาได้ ลองอีกครั้ง");
+  }
+  return plan;
 }
 
 // ─── JSON extraction helpers (LLMs sometimes wrap output in prose/fences) ─────
@@ -129,9 +167,11 @@ function parseJsonArray(text: string): string[] {
 
 function parseJsonObjects(text: string): Record<string, unknown>[] {
   try {
+    console.log("[ai.parseJsonObjects] parsing AI response:", text);
     const arr = JSON.parse(extractJson(text));
     return Array.isArray(arr) ? arr : [];
-  } catch {
+  } catch (err) {
+    console.error("[ai.parseJsonObjects] failed to parse AI response:", text, err);
     return [];
   }
 }

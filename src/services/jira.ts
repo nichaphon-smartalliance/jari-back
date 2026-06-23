@@ -18,6 +18,7 @@ export interface JiraIssueRaw {
     issuetype: { name: string; subtask: boolean };
     labels: string[];
     parent?: { id: string; key: string };
+    description?: AdfNode | null;
   };
 }
 
@@ -195,6 +196,40 @@ export async function fetchIssueInfoBatch(
       }
     } catch {
       /* skip batch on error */
+    }
+  }
+
+  return map;
+}
+
+/** Summary + plain-text description (+ parent key) for a batch of issue keys —
+ *  used by AI worklog planning to give the model real context instead of just titles. */
+export async function fetchIssueDetails(
+  ws: WorkspaceConfig,
+  keys: string[],
+): Promise<Map<string, { summary: string; description: string; parentKey?: string }>> {
+  const map = new Map<string, { summary: string; description: string; parentKey?: string }>();
+  if (keys.length === 0) return map;
+
+  for (let i = 0; i < keys.length; i += 50) {
+    const batch = keys.slice(i, i + 50);
+    const res = await fetch(`${ws.baseUrl}/rest/api/3/search/jql`, {
+      method: "POST",
+      headers: jiraHeaders(ws),
+      body: JSON.stringify({
+        jql: `key in (${batch.join(",")})`,
+        fields: ["summary", "description", "parent"],
+        maxResults: 50,
+      }),
+    });
+    if (!res.ok) throw new Error(`[${ws.name}] issue details ${res.status}: ${await res.text()}`);
+    const data = (await res.json()) as { issues: JiraIssueRaw[] };
+    for (const issue of data.issues) {
+      map.set(issue.key, {
+        summary: issue.fields.summary ?? "",
+        description: adfToText(issue.fields.description ?? undefined),
+        parentKey: issue.fields.parent?.key,
+      });
     }
   }
 
