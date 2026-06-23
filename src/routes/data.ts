@@ -4,7 +4,10 @@ import {
   getIssues,
   getMyOpenIssues,
   getProjects,
+  getProjectStatus,
   getSprintIssues,
+  getSprintTimeline,
+  getSprintWorkload,
   getUsers,
   getWorklogs,
 } from "../services/aggregate";
@@ -21,6 +24,11 @@ data.get("/users", async (c) => c.json(await getUsers()));
 data.get("/projects", async (c) => c.json(await getProjects()));
 
 data.get("/dashboard", async (c) => c.json(await computeDashboard()));
+
+// Dashboard report sections (#1 workload, #2 timeline, #3 project status).
+data.get("/reports/workload", async (c) => c.json({ people: await getSprintWorkload() }));
+data.get("/reports/timeline", async (c) => c.json(await getSprintTimeline()));
+data.get("/reports/project-status", async (c) => c.json({ projects: await getProjectStatus() }));
 
 data.get("/issues", async (c) => {
   const issues = await getIssues({

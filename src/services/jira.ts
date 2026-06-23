@@ -100,6 +100,36 @@ export async function searchIssues(ws: WorkspaceConfig, jql: string): Promise<Ji
 
 export const fetchAllIssues = (ws: WorkspaceConfig) => searchIssues(ws, "status != ''");
 
+/** Ids of issues currently in an open/active sprint (`sprint in openSprints()`).
+ *  Lightweight (ids only). Throws if the JQL is unsupported (e.g. no Scrum board)
+ *  — the caller treats that as "nothing to mark". */
+export async function fetchOpenSprintIssueIds(ws: WorkspaceConfig): Promise<string[]> {
+  const ids: string[] = [];
+  let cursor: string | undefined;
+
+  do {
+    const body: Record<string, unknown> = {
+      jql: "sprint in openSprints()",
+      fields: ["id"],
+      maxResults: 100,
+    };
+    if (cursor) body.nextPageToken = cursor;
+
+    const res = await fetch(`${ws.baseUrl}/rest/api/3/search/jql`, {
+      method: "POST",
+      headers: jiraHeaders(ws),
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`[${ws.name}] open-sprint search ${res.status}: ${await res.text()}`);
+    const data = (await res.json()) as JiraSearchPage;
+    for (const issue of data.issues) ids.push(issue.id);
+    cursor = data.nextPageToken;
+    if (data.isLast || !cursor) break;
+  } while (true);
+
+  return ids;
+}
+
 export async function fetchWorklogIdsSince(sinceMs: number, ws: WorkspaceConfig): Promise<number[]> {
   const allIds: number[] = [];
   let since = sinceMs;

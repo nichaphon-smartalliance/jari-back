@@ -32,6 +32,7 @@ export async function initSchema() {
       parent_key            VARCHAR(50),
       labels                TEXT[],
       due_date              DATE,
+      in_open_sprint        BOOLEAN      DEFAULT FALSE,
       jira_created_at       TIMESTAMPTZ  NOT NULL,
       jira_updated_at       TIMESTAMPTZ  NOT NULL,
       synced_at             TIMESTAMPTZ  DEFAULT NOW(),
@@ -39,7 +40,12 @@ export async function initSchema() {
     )
   `;
 
+  // Marks issues that are in an open/active Jira sprint (set by syncIssues via
+  // the `sprint in openSprints()` JQL). Drives the sprint-scoped dashboard.
+  await sql`ALTER TABLE issues ADD COLUMN IF NOT EXISTS in_open_sprint BOOLEAN DEFAULT FALSE`;
+
   await sql`CREATE INDEX IF NOT EXISTS idx_issues_workspace ON issues(workspace_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_issues_sprint    ON issues(in_open_sprint)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_issues_project   ON issues(project_key, workspace_id)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_issues_status    ON issues(status_category)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_issues_assignee  ON issues(assignee_account_id)`;

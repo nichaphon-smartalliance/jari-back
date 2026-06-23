@@ -4,6 +4,7 @@ import {
   adfToText,
   fetchAllIssues,
   fetchIssueInfoBatch,
+  fetchOpenSprintIssueIds,
   fetchWorklogDetails,
   fetchWorklogIdsSince,
   type JiraIssueRaw,
@@ -150,6 +151,33 @@ export async function recordWorklogLocal(wsId: string, wl: JiraWorklogRaw): Prom
   await upsertWorklogs([wl], issueMap, wsId);
 }
 
+/**
+ * Flag which issues are in an open sprint. Stories are marked from the
+ * `sprint in openSprints()` result; subtasks have no sprint field of their own,
+ * so they inherit their parent story's membership.
+ */
+async function markOpenSprint(wsId: string, openIds: string[]): Promise<void> {
+  await sql`UPDATE issues SET in_open_sprint = false WHERE workspace_id = ${wsId}`;
+
+  for (let i = 0; i < openIds.length; i += 1000) {
+    const chunk = openIds.slice(i, i + 1000);
+    await sql`
+      UPDATE issues SET in_open_sprint = true
+      WHERE workspace_id = ${wsId} AND id IN ${sql(chunk)}
+    `;
+  }
+
+  // Subtasks inherit their parent story's open-sprint membership.
+  await sql`
+    UPDATE issues s SET in_open_sprint = true
+    WHERE s.workspace_id = ${wsId} AND s.is_subtask = true
+      AND EXISTS (
+        SELECT 1 FROM issues p
+        WHERE p.workspace_id = s.workspace_id AND p.key = s.parent_key AND p.in_open_sprint = true
+      )
+  `;
+}
+
 export async function syncIssues(): Promise<SyncResult[]> {
   const workspaces = getWorkspaces();
   if (workspaces.length === 0) throw new Error("No Jira workspaces configured in .env");
@@ -160,6 +188,18 @@ export async function syncIssues(): Promise<SyncResult[]> {
       await upsertWorkspace(ws);
       const issues = await fetchAllIssues(ws);
       const count = await upsertIssues(issues, ws.id);
+
+      // Tag open-sprint membership for the sprint-scoped dashboard. Non-fatal:
+      // projects without a Scrum board make the JQL fail, which just leaves the
+      // flags cleared.
+      try {
+        const openIds = await fetchOpenSprintIssueIds(ws);
+        await markOpenSprint(ws.id, openIds);
+        console.log(`[sync] ${ws.name}: ${openIds.length} issues in open sprints`);
+      } catch (err) {
+        console.warn(`[sync] ${ws.name} open-sprint mark skipped:`, String(err));
+      }
+
       await sql`UPDATE workspaces SET last_synced_at = NOW() WHERE id = ${ws.id}`;
       results.push({ workspace: ws.name, count });
       console.log(`[sync] ${ws.name}: ${count} issues`);
