@@ -107,13 +107,30 @@ export async function getSprintIssues(): Promise<Issue[]> {
   return rows.map(rowToIssue);
 }
 
-export async function getMyOpenIssues(accountId: string): Promise<Issue[]> {
+/** Our simplified category ("todo"/"inprogress"/"done") -> Jira's raw statusCategory.key
+ *  stored in the `issues.status_category` column. Mirrors `mapStatusCategory` in reverse. */
+const RAW_STATUS_NAME: Record<string, string> = {
+  todo: "To Do",
+  inprogress: "In Progress",
+  done: "Done",
+  blocked: "BLOCKED",
+  qa: "QA&TEST",
+};
+
+/** @param statusCategories our simplified categories; defaults to ["todo","inprogress"] */
+export async function getMyOpenIssues(
+  accountId: string,
+  statusCategories?: string[],
+): Promise<Issue[]> {
+  const categories = (statusCategories?.length ? statusCategories : ["todo", "inprogress"]).map(
+    (c) => RAW_STATUS_NAME[c] ?? c,
+  );
   const rows = await sql<IssueRow[]>`
     SELECT i.*,
       EXISTS (SELECT 1 FROM worklogs wl WHERE wl.issue_id = i.id AND wl.workspace_id = i.workspace_id) AS has_worklog
     FROM issues i
     WHERE i.assignee_account_id = ${accountId}
-      AND i.status_category != 'done'
+      AND i.status_name IN ${sql(categories)}
     ORDER BY i.due_date ASC NULLS LAST
   `;
   return rows.map(rowToIssue);
@@ -125,7 +142,7 @@ export async function getWorklogCandidates(accountId: string): Promise<Issue[]> 
     SELECT i.*, FALSE AS has_worklog
     FROM issues i
     WHERE i.is_subtask = true
-      AND i.status_category = 'done'
+      AND i.status_name = 'Done'
       AND i.assignee_account_id = ${accountId}
       AND NOT EXISTS (
         SELECT 1 FROM worklogs wl WHERE wl.issue_id = i.id AND wl.workspace_id = i.workspace_id
@@ -142,14 +159,14 @@ export async function computeDashboard(): Promise<DashboardData> {
   const today = new Date().toISOString().slice(0, 10);
 
   const total = issues.length;
-  const completed = issues.filter((i) => i.status_category === "done").length;
-  const inProgress = issues.filter((i) => i.status_category === "indeterminate").length;
+  const completed = issues.filter((i) => i.status_name === "Done").length;
+  const inProgress = issues.filter((i) => i.status_name === "In Progress").length;
   const overdue = issues.filter(
-    (i) => i.status_category !== "done" && i.due_date && i.due_date < today,
+    (i) => i.status_name !== "Done" && i.due_date && i.due_date < today,
   ).length;
 
   const doneOnTime = issues.filter((i) => {
-    if (i.status_category !== "done") return false;
+    if (i.status_name !== "Done") return false;
     if (!i.due_date) return true;
     return new Date(i.due_date) >= new Date(toISO(i.jira_updated_at).slice(0, 10));
   }).length;
@@ -177,8 +194,8 @@ export async function computeDashboard(): Promise<DashboardData> {
         loggedHoursToday:
           Math.round(((loggedToday.get(i.assignee_account_id) ?? 0) / 3600) * 10) / 10,
       };
-    if (i.status_category === "done") w.done++;
-    else if (i.status_category === "indeterminate") w.inProgress++;
+    if (i.status_name === "Done") w.done++;
+    else if (i.status_name === "In Progress") w.inProgress++;
     else w.todo++;
     workloadMap.set(i.assignee_account_id, w);
   }
@@ -189,8 +206,8 @@ export async function computeDashboard(): Promise<DashboardData> {
       projectMap.get(i.project_key) ??
       { projectKey: i.project_key, projectName: i.project_name, total: 0, done: 0, overdue: 0, healthScore: 100 };
     p.total++;
-    if (i.status_category === "done") p.done++;
-    if (i.status_category !== "done" && i.due_date && i.due_date < today) p.overdue++;
+    if (i.status_name === "Done") p.done++;
+    if (i.status_name !== "Done" && i.due_date && i.due_date < today) p.overdue++;
     projectMap.set(i.project_key, p);
   }
   const projects = [...projectMap.values()].map((p) => ({
@@ -230,7 +247,7 @@ function computeTrend(issues: IssueRow[]): DashboardData["trend"] {
     const label = d.toLocaleDateString("en-GB", { month: "short" });
     const created = issues.filter((r) => toISO(r.jira_created_at).startsWith(key)).length;
     const completed = issues.filter(
-      (r) => r.status_category === "done" && toISO(r.jira_updated_at).startsWith(key),
+      (r) => r.status_name === "Done" && toISO(r.jira_updated_at).startsWith(key),
     ).length;
     out.push({ month: label, created, completed });
   }

@@ -44,7 +44,9 @@ data.get("/sprint", async (c) => c.json({ issues: await getSprintIssues() }));
 data.get("/my-issues", async (c) => {
   const accountId = c.req.query("accountId");
   if (!accountId) return c.json({ error: "accountId required" }, 400);
-  return c.json({ issues: await getMyOpenIssues(accountId) });
+  const status = c.req.query("status");
+  const statusCategories = status ? status.split(",").filter(Boolean) : undefined;
+  return c.json({ issues: await getMyOpenIssues(accountId, statusCategories) });
 });
 
 data.get("/worklogs", async (c) => {
