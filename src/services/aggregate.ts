@@ -382,6 +382,25 @@ export async function setIssueDoneLocal(key: string): Promise<void> {
   `;
 }
 
+/** Seconds this person has already logged, grouped by day (Asia/Bangkok), since
+ *  `since`. Used by the AI backfill to avoid overfilling days that already have
+ *  worklogs. */
+export async function getLoggedSecondsByDay(
+  accountId: string,
+  since: string,
+): Promise<Record<string, number>> {
+  const rows = await sql<{ day: string; secs: number }[]>`
+    SELECT to_char((started_at AT TIME ZONE 'Asia/Bangkok')::date, 'YYYY-MM-DD') AS day,
+           COALESCE(SUM(time_spent_seconds), 0)::int AS secs
+    FROM worklogs
+    WHERE author_account_id = ${accountId} AND started_at >= ${since}::date
+    GROUP BY day
+  `;
+  const out: Record<string, number> = {};
+  for (const r of rows) out[r.day] = r.secs;
+  return out;
+}
+
 // ─── Dashboard reports (sprint-scoped) ────────────────────────────────────────
 
 // #1 — Sprint workload: per person, subtasks waiting / done / total in the open sprint.
