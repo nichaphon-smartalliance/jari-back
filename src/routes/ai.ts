@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import {
+  draftStory,
   estimateWorklogHours,
   packBackfill,
   planWorklogs,
@@ -11,6 +12,13 @@ import { getLoggedSecondsByDay } from "../services/aggregate";
 const ai = new Hono();
 
 const WORKDAY_SECONDS = 8 * 3600;
+
+// #2 — one free-form brief in, a ready-to-create Story (title + description + sub-tasks) out.
+ai.post("/ai/draft-story", async (c) => {
+  const { brief } = await c.req.json<{ brief: string }>();
+  if (!brief?.trim()) return c.json({ error: "brief required" }, 400);
+  return c.json(await draftStory(brief));
+});
 
 ai.post("/ai/rewrite", async (c) => {
   const { raw, kind } = await c.req.json<{ raw: string; kind: "title" | "description" }>();

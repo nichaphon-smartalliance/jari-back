@@ -266,12 +266,32 @@ export async function searchUser(ws: WorkspaceConfig, query: string) {
 
 // ─── Writes ───────────────────────────────────────────────────────────────────
 
+/** Epics in a project, for the optional Epic picker on the create page (#2).
+ *  Best-effort: returns [] if the JQL is unsupported on this Jira instance so the
+ *  UI just hides the picker instead of erroring. */
+export async function listEpics(
+  ws: WorkspaceConfig,
+  projectKey: string,
+): Promise<{ key: string; summary: string }[]> {
+  try {
+    const issues = await searchIssues(
+      ws,
+      `project = "${projectKey}" AND issuetype = Epic AND statusCategory != Done ORDER BY created DESC`,
+    );
+    return issues.map((i) => ({ key: i.key, summary: i.fields.summary ?? "" }));
+  } catch {
+    return [];
+  }
+}
+
 export interface CreateStoryArgs {
   projectKey: string;
   summary: string;
   description?: string;
   priority?: Priority;
   assigneeAccountId?: string;
+  /** Optional Epic to nest the Story under (Jira's unified `parent` field). */
+  epicKey?: string;
 }
 
 export async function createStory(ws: WorkspaceConfig, args: CreateStoryArgs): Promise<{ id: string; key: string }> {
@@ -283,6 +303,7 @@ export async function createStory(ws: WorkspaceConfig, args: CreateStoryArgs): P
   };
   if (args.priority) fields.priority = { name: args.priority };
   if (args.assigneeAccountId) fields.assignee = { accountId: args.assigneeAccountId };
+  if (args.epicKey) fields.parent = { key: args.epicKey };
 
   return createIssue(ws, fields);
 }

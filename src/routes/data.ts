@@ -11,7 +11,8 @@ import {
   getUsers,
   getWorklogs,
 } from "../services/aggregate";
-import { getWorkspaces } from "../services/workspaces";
+import { getWorkspace, getWorkspaces } from "../services/workspaces";
+import { listEpics } from "../services/jira";
 
 const data = new Hono();
 
@@ -22,6 +23,13 @@ data.get("/workspaces", (c) =>
 data.get("/users", async (c) => c.json(await getUsers()));
 
 data.get("/projects", async (c) => c.json(await getProjects()));
+
+// Optional Epic picker for the create page (#2). Best-effort, live from Jira.
+data.get("/epics", async (c) => {
+  const projectKey = c.req.query("projectKey");
+  if (!projectKey) return c.json({ epics: [] });
+  return c.json({ epics: await listEpics(getWorkspace(), projectKey) });
+});
 
 data.get("/dashboard", async (c) => c.json(await computeDashboard()));
 

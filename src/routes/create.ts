@@ -12,6 +12,7 @@ interface CreateStoryBody {
   description?: string;
   priority?: Priority;
   assigneeAccountId?: string;
+  epicKey?: string;
   subtasks?: string[];
 }
 
@@ -26,6 +27,7 @@ create.post("/stories", async (c) => {
     description: body.description,
     priority: body.priority,
     assigneeAccountId: body.assigneeAccountId,
+    epicKey: body.epicKey,
   });
 
   const subtaskKeys: string[] = [];

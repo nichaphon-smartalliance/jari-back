@@ -55,6 +55,49 @@ export async function rewriteText(raw: string, kind: "title" | "description"): P
   );
 }
 
+export interface StoryDraft {
+  title: string;
+  description: string;
+  subtasks: string[];
+}
+
+/** #2 — turn a free-form brief ("เล่าเรื่องงานที่อยากสร้าง...") into a ready-to-create
+ *  Story: a clean title, a structured description, and actionable sub-tasks — all in
+ *  one call so the user types once and reviews. Replies in the user's own language. */
+export async function draftStory(brief: string): Promise<StoryDraft> {
+  const content = await chat(
+    [
+      {
+        role: "system",
+        content:
+          "คุณคือผู้ช่วยวางแผนงานใน Jira ผู้ใช้จะเล่างานที่อยากสร้างแบบคร่าว ๆ ด้วยภาษาธรรมชาติ " +
+          "ให้คุณแปลงเป็น Story ที่พร้อมสร้างทันที ประกอบด้วย " +
+          "(1) หัวข้อที่กระชับ ชัดเจน เป็นมืออาชีพ บรรทัดเดียว, " +
+          "(2) รายละเอียดที่จัดรูปแบบดี มีวัตถุประสงค์ ขอบเขตงาน และเกณฑ์การยอมรับ (acceptance criteria), " +
+          "(3) รายการ sub-task ที่แบ่งงานเป็นขั้นตอนปฏิบัติได้จริง 3-6 ข้อ เรียงตามลำดับการทำงาน " +
+          "ตอบกลับเป็น JSON object เท่านั้น ไม่มีข้อความอื่นหรือ markdown fence " +
+          'รูปแบบ {"title":"...","description":"...","subtasks":["...","..."]} ' +
+          "ใช้ภาษาเดียวกับที่ผู้ใช้เล่ามา",
+      },
+      { role: "user", content: brief },
+    ],
+    { temperature: 0.5, max_tokens: 2000 },
+  );
+
+  const obj = parseJsonObject(content);
+  const title = typeof obj.title === "string" ? obj.title.trim() : "";
+  const description = typeof obj.description === "string" ? obj.description.trim() : "";
+  const subtasks = Array.isArray(obj.subtasks)
+    ? obj.subtasks.map(String).map((s) => s.trim()).filter(Boolean)
+    : [];
+
+  if (!title) {
+    console.error("[ai.draftStory] unusable content:", content);
+    throw new Error("AI ไม่สามารถร่างงานได้ ลองเล่ารายละเอียดเพิ่มแล้วลองใหม่");
+  }
+  return { title, description, subtasks };
+}
+
 /** #2 — suggest sub-task titles. Returns a parsed JSON array (best-effort). */
 export async function suggestSubtasks(title: string, description: string): Promise<string[]> {
   const content = await chat(
@@ -256,6 +299,16 @@ function parseJsonArray(text: string): string[] {
     return Array.isArray(arr) ? arr.map(String) : [];
   } catch {
     return [];
+  }
+}
+
+function parseJsonObject(text: string): Record<string, unknown> {
+  try {
+    const obj = JSON.parse(extractJson(text));
+    return obj && typeof obj === "object" && !Array.isArray(obj) ? obj : {};
+  } catch (err) {
+    console.error("[ai.parseJsonObject] failed to parse AI response:", text, err);
+    return {};
   }
 }
 
