@@ -18,6 +18,7 @@ interface AppUserRow {
   display_name: string;
   jira_email: string | null;
   jira_api_token_enc: string | null;
+  jira_token_expires_at: string | null;
 }
 
 // ─── Password hashing (Bun's built-in argon2id) ───────────────────────────────
@@ -70,7 +71,7 @@ export function verifyToken(token: string): TokenPayload | null {
 export async function findUser(username: string): Promise<AppUserRow | null> {
   const rows = await sql<AppUserRow[]>`
     SELECT username, password_hash, jira_account_id, display_name,
-           jira_email, jira_api_token_enc
+           jira_email, jira_api_token_enc, jira_token_expires_at
     FROM app_users WHERE username = ${username}
   `;
   return rows[0] ?? null;
@@ -120,14 +121,16 @@ export async function setUserJiraAccount(args: {
   token: string;
   accountId: string;
   displayName: string;
+  expiresAt: string | null;
 }): Promise<void> {
   const enc = encryptSecret(args.token);
   await sql`
     UPDATE app_users SET
-      jira_email         = ${args.email},
-      jira_api_token_enc = ${enc},
-      jira_account_id    = ${args.accountId},
-      display_name       = ${args.displayName}
+      jira_email             = ${args.email},
+      jira_api_token_enc     = ${enc},
+      jira_account_id        = ${args.accountId},
+      display_name           = ${args.displayName},
+      jira_token_expires_at  = ${args.expiresAt}
     WHERE username = ${args.username}
   `;
 }

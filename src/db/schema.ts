@@ -101,5 +101,11 @@ export async function initSchema() {
   await sql`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS jira_api_token_enc TEXT`;
   await sql`ALTER TABLE app_users ALTER COLUMN jira_account_id DROP NOT NULL`;
 
+  // The expiry date the user picked on Atlassian's "Create an API token" dialog.
+  // Lets Settings warn before Jira itself starts rejecting the token, and lets
+  // Work/Worklog block usage with a clear "update your token" message instead of
+  // a raw Jira 401.
+  await sql`ALTER TABLE app_users ADD COLUMN IF NOT EXISTS jira_token_expires_at DATE`;
+
   console.log("Schema ready");
 }

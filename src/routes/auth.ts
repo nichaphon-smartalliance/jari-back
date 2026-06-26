@@ -60,12 +60,17 @@ auth.get("/auth/jira-account", async (c) => {
   const row = await findUser(payload.username);
   if (!row) return c.json({ error: "user not found" }, 404);
 
+  const today = new Date().toISOString().slice(0, 10);
+  const tokenExpiresAt = row.jira_token_expires_at;
+
   return c.json({
     username: row.username,
     displayName: row.display_name,
     jiraEmail: row.jira_email ?? "",
     accountId: row.jira_account_id ?? "",
     hasToken: !!row.jira_api_token_enc,
+    tokenExpiresAt,
+    tokenExpired: !!tokenExpiresAt && tokenExpiresAt < today,
   });
 });
 
@@ -77,8 +82,15 @@ auth.post("/auth/jira-account", async (c) => {
   const payload = authUser(c);
   if (!payload) return c.json({ error: "invalid token" }, 401);
 
-  const { email, token } = await c.req.json<{ email?: string; token?: string }>();
+  const { email, token, expiresAt } = await c.req.json<{
+    email?: string;
+    token?: string;
+    expiresAt?: string;
+  }>();
   if (!email || !token) return c.json({ error: "email และ token จำเป็นต้องกรอก" }, 400);
+  if (expiresAt && !/^\d{4}-\d{2}-\d{2}$/.test(expiresAt)) {
+    return c.json({ error: "วันหมดอายุของ token ไม่ถูกต้อง" }, 400);
+  }
 
   // Validate the credentials against the configured Jira site before storing.
   const base = getWorkspace();
@@ -98,6 +110,7 @@ auth.post("/auth/jira-account", async (c) => {
     token: token.trim(),
     accountId: me.accountId,
     displayName: me.displayName,
+    expiresAt: expiresAt ?? null,
   });
 
   const user: AppUser = {
