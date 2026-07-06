@@ -131,6 +131,7 @@ export async function getMyOpenIssues(
     FROM issues i
     WHERE i.assignee_account_id = ${accountId}
       AND i.status_name IN ${sql(categories)}
+      AND i.in_open_sprint = true
     ORDER BY i.due_date ASC NULLS LAST
   `;
   return rows.map(rowToIssue);
